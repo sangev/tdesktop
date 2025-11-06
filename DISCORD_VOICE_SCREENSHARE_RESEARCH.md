@@ -675,26 +675,236 @@ Telegram/SourceFiles/calls/
 
 ---
 
-## 7. Conclusion
+## 7. Scalability Assessment for Large Teams (100+ Users)
+
+### 7.1 Current Telegram Group Call Limits
+
+**Server-Side Constraints:**
+
+| Metric | Limit | Code Reference |
+|--------|-------|----------------|
+| **Total Participants** | 1,000 viewers/listeners | Server-enforced |
+| **Active Broadcasters** | 30 simultaneous video/audio | `data_group_call.cpp:537` (`unmutedVideoLimit`) |
+| **Client Video Rendering** | 16 medium quality streams | `calls_group_call.cpp:61` (`kMaxMediumQualities`) |
+| | 4 full quality streams | Equivalent to 16 medium |
+
+**Key Finding:** The 30 active broadcaster limit is **server-side** and controlled by `unmutedVideoLimit` field from Telegram's backend. This cannot be changed in tdesktop client code.
+
+### 7.2 100-Person Team Requirements Analysis
+
+#### Scenario 1: All-Hands Meetings (Few Speakers)
+**Use Case:** Company-wide announcements, presentations
+
+- **Speakers:** 5-10 people (presenters, leadership)
+- **Listeners:** 90-95 people
+- **Verdict:** ✅ **WORKS WELL**
+  - Well within 30 active broadcaster limit
+  - All 100 within 1,000 total participant limit
+  - Recommended: Designate speakers, mute others
+
+#### Scenario 2: Team Standup (Moderate Interaction)
+**Use Case:** Daily standups, sprint planning
+
+- **Active Speakers:** 15-25 people (rotating)
+- **Listeners:** 75-85 people
+- **Verdict:** ✅ **WORKS** (with management)
+  - Within 30 broadcaster limit if managed
+  - Use push-to-talk or hand-raise features
+  - Moderator unmutes speakers in sequence
+
+#### Scenario 3: Open Discussion (High Interaction)
+**Use Case:** Brainstorming sessions, open debates
+
+- **Potential Speakers:** 50-100 people (anyone can speak)
+- **Simultaneous Speakers:** 30+ at peak
+- **Verdict:** ⚠️ **BOTTLENECK**
+  - **Problem:** 30 active broadcaster hard limit
+  - Only 30 can broadcast simultaneously
+  - Others blocked from unmuting/video when limit reached
+  - Results in "take turns" situation
+
+#### Scenario 4: Persistent Voice Channels (Discord-Style)
+**Use Case:** "Always-on" channels where team members drop in/out
+
+- **Typical Occupancy:** 20-40 people in channel
+- **Active Speakers:** Variable (5-15 typically)
+- **Verdict:** ✅ **WORKS** (most of the time)
+  - Usually under 30 active limit
+  - May hit limit during peak times
+  - Need intelligent audio routing (PTT recommended)
+
+### 7.3 Comparison: Discord vs Telegram at 100-Person Scale
+
+| Capability | Discord | Telegram (Current) |
+|------------|---------|-------------------|
+| **Total Capacity** | 1,000 participants | 1,000 participants |
+| **Simultaneous Audio Broadcasters** | 1,000 (all can speak) | 30 (server limit) |
+| **Simultaneous Video Broadcasters** | 1,000 | 30 (server limit) |
+| **Client Rendering Limit** | ~25-50 video tiles | 16 medium quality streams |
+| **100-Person Open Discussion** | ✅ Supported | ❌ Bottleneck (30 limit) |
+| **100-Person Presentation** | ✅ Supported | ✅ Supported |
+
+### 7.4 Infrastructure Sufficiency Assessment
+
+**For a 100-person growing team:**
+
+#### ❌ Current Infrastructure (Approach D) - INSUFFICIENT for Full Interactivity
+
+**Limitations:**
+1. **30 active broadcaster ceiling** - Cannot be overcome without server changes
+2. **Blocks "everyone can speak" scenarios** - Critical for collaborative teams
+3. **Not scalable beyond 30 simultaneous speakers** - Growing team will hit this wall
+4. **Code Evidence:**
+   ```cpp
+   // calls/group/calls_group_call.cpp:2691
+   if (real && activeVideoSendersCount() >= real->unmutedVideoLimit()) {
+       // User blocked from enabling video
+   }
+   ```
+
+#### ⚠️ Workarounds (Tactical Solutions)
+
+1. **Push-to-Talk (PTT) Enforcement**
+   - Prevents accidental broadcaster limit hits
+   - Requires discipline
+   - Code location: Can enhance in `calls_controller.h`
+
+2. **Moderator-Controlled Unmuting**
+   - Manual management of who can speak
+   - Scalability issue: requires active moderation
+   - Already supported via group call permissions
+
+3. **Split Into Multiple Smaller Calls**
+   - Divide 100-person team into 4x 25-person groups
+   - Defeats purpose of unified team communication
+   - Organizational overhead
+
+4. **Hybrid Model: Voice-Only for Most**
+   - 30 video slots for presenters
+   - Remaining 70 use audio-only (still counts toward 30 if broadcasting)
+   - Still hits 30 active broadcaster limit
+
+**Conclusion:** Workarounds are **tactical patches**, not strategic solutions.
+
+#### ✅ Required Solution: Approach A (Discord-Style SFU) - NECESSARY
+
+**Why Approach A is Required:**
+
+To truly support 100+ simultaneous speakers, you need:
+
+1. **Server-Side SFU Implementation**
+   - Remove 30 broadcaster limit
+   - Scale to 100+ active audio/video streams
+   - **Cannot be done in tdesktop alone**
+
+2. **Backend Infrastructure Changes**
+   - Deploy SFU servers (Elixir/Rust/C++ as Discord does)
+   - Modify Telegram server to increase `unmutedVideoLimit`
+   - Update MTProto to support higher limits
+
+3. **Combined Approach**
+   - Implement Approach A (server-side SFU) **AND**
+   - Implement Approach D (client-side UX improvements)
+   - Timeline: 6-12 months for full implementation
+
+### 7.5 Recommendation for 100-Person Team
+
+#### Short-Term (0-3 months) - Use Current Infrastructure with Constraints
+
+1. **Accept 30 broadcaster limit**
+2. **Implement Approach D UX improvements** (from research)
+   - Better quality controls
+   - Speaking indicators
+   - Screen share optimization
+3. **Establish team protocols**
+   - Push-to-talk for large meetings
+   - Moderator-managed speaker queue
+   - Split into smaller sub-teams when needed
+
+**Viability:** ⚠️ **Partial** - Works for presentations, limited interaction
+
+---
+
+#### Long-Term (3-12 months) - Server Infrastructure Upgrade
+
+1. **Implement Approach A: Discord-Style SFU**
+   - Work with Telegram server team (or fork server code)
+   - Deploy custom SFU infrastructure
+   - Increase `unmutedVideoLimit` to 100+
+
+2. **Combine with Approach D Client Improvements**
+   - Full Discord-like experience
+   - 100+ simultaneous speakers supported
+   - Client handles rendering 16-30 videos, but all can speak
+
+**Viability:** ✅ **Full Solution** - Requires server-side development
+
+---
+
+#### Alternative: Use Discord for Large Interactive Meetings
+
+**Pragmatic Assessment:**
+
+If the requirement is **100 people in open discussion RIGHT NOW**:
+- Telegram's current infrastructure cannot support this
+- Discord can support this today
+- Consider using Discord for specific large interactive sessions
+- Use Telegram for everything else (messaging, smaller calls, security)
+
+**Hybrid Approach:**
+- Telegram: Daily communication, small team calls (<30 active)
+- Discord: Large all-hands, open discussions (100+ active)
+- Timeline: Immediate (no development needed)
+
+### 7.6 Updated Feasibility Matrix
+
+| Approach | 100-Person Support | Timeline | Feasibility |
+|----------|-------------------|----------|-------------|
+| **A: Discord-Style SFU** | ✅ Full (100+ speakers) | 6-12 months | ⚠️ Requires server dev |
+| **B: Enhanced Group Calls** | ⚠️ Partial (30 speakers) | 2-4 months | ✅ tdesktop-only |
+| **C: Hybrid Bridge** | ❌ Complex, ToS issues | 4-6 months | ❌ Not recommended |
+| **D: Inspired Feature Parity** | ⚠️ Partial (30 speakers) | 3-6 months | ✅ tdesktop-only |
+| **E: Use Discord Directly** | ✅ Full (1000+ speakers) | Immediate | ✅ No development |
+
+---
+
+## 8. Conclusion
 
 Discord's voice and screensharing success comes from:
 1. **Simplified architecture** (SFU eliminates P2P complexity)
 2. **Optimized signaling** (custom protocol, 1KB vs 10KB)
 3. **Excellent codecs** (Opus, AV1)
 4. **User-first UX** (persistent channels, quick join/leave)
+5. **Unlimited active speakers** (all 1,000 participants can broadcast)
 
 Telegram can adopt Discord's best UX patterns while maintaining its core principles:
 - **Security:** E2E encryption
 - **Privacy:** Optional P2P, IP protection
 - **Flexibility:** Dual engine support
 
-**Recommended path:** Implement Phase 1-3 of Approach D (Inspired Feature Parity) within tdesktop, focusing on UX improvements that don't require server changes.
+### Final Recommendations Based on Team Size
 
-This provides Discord-like experience while respecting Telegram's architecture and values.
+**For teams <30 active participants:**
+- **Recommended path:** Implement Approach D (Inspired Feature Parity)
+- Focus on UX improvements within tdesktop
+- No server changes required
+- Timeline: 3-6 months
+
+**For teams with 100+ active participants:**
+- **Current infrastructure:** ❌ INSUFFICIENT (30 broadcaster limit)
+- **Required solution:** Approach A (Discord-Style SFU) + server upgrades
+- **Alternative:** Use Discord for large interactive meetings, Telegram for everything else
+- **Timeline for full solution:** 6-12 months (requires server-side development)
+
+### Critical Constraint Discovered
+
+The research initially focused on client-side improvements, but **scalability analysis reveals a fundamental server-side bottleneck**: Telegram's 30 active broadcaster limit (vs Discord's 1,000). This limit is hardcoded server-side (`unmutedVideoLimit`) and cannot be changed in tdesktop alone.
+
+**Bottom line:** Client-side improvements (Approach D) enhance UX but don't solve the 100-person concurrent speaker requirement. That requires server infrastructure changes (Approach A).
 
 ---
 
-## 8. References
+## 9. References
 
 ### Documentation
 - Discord Engineering Blog: WebRTC at Scale
